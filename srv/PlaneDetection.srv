@@ -1,0 +1,8 @@
+# typical use doesn't put anything in the request, as the node listens for incoming point clouds on its own
+
+---
+# The information for the plane that has been detected
+Plane[] plane
+
+# Whether the detection has succeeded or failed
+string result

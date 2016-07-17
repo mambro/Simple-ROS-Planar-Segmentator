@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch> 
+  
+<!-- Simple planar segmentator -->
+ <node pkg="simple_planar_segmentator" type="simple_planar_segmentator" name="simple_planar_segmentator" output="screen">
+    <param name="cloud_input_topic"  type="string"     value="/kinect2/hd/points"/>
+    <param name="debug"  type="bool"  value="true"/>
+    <param name="use_pclviewer"  type="bool"      value="false"/>
+    <param name="filtering_pointcloud"  type="bool"    value="false"/> 
+  </node>  
+</launch>
+

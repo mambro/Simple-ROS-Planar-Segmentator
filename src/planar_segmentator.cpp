@@ -38,6 +38,7 @@ public:
         cloud_p_(new pcl::PointCloud<pcl::PointXYZRGB>),
         cloud_hull_ (new pcl::PointCloud<pcl::PointXYZRGB>),
         cloud_segmented_ (new pcl::PointCloud<pcl::PointXYZRGB>),
+        cloud_filtered_(new pcl::PointCloud<pcl::PointXYZRGB>),
         savings_(0)
         //pcl_viewer_ (new pcl::visualization::PCLVisualizer ("3D Viewer"))
 
@@ -60,9 +61,11 @@ private:
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_src_;
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_p_, cloud_segmented_ ;
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_hull_;
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered2;
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered_;
 
     pcl::ConcaveHull<pcl::PointXYZRGB> chull_;
+
+    pcl::PCLPointCloud2Ptr cloud_pointcloud2_;
 
 
     // PCL Viewer
@@ -108,24 +111,30 @@ private:
     {
         // Convert the sensor_msgs/PointCloud2 data to pcl/PointCloud
         pcl::fromPCLPointCloud2(*input,*cloud_src_);
+        cloud_pointcloud2_ = pcl::PCLPointCloud2Ptr(new pcl::PCLPointCloud2(*input));
     }  
-
-
 
     bool planeDetection(simple_planar_segmentator::PlaneDetection::Request & req,
                       simple_planar_segmentator::PlaneDetection::Response & res)
     {
+        if (debug_)
+        {
+            std::cout << "inside ros service: " << std::endl;
+        }
         // Create the filtering object: downsample the dataset using a leaf size of 0.5cm
         if (filtering_pointcloud_)
         {
-            /* TODO
-             pcl::VoxelGrid<pcl::PCLPointCloud2> sor;
-            sor.setInputCloud (cloud_src_);
+            pcl::VoxelGrid<pcl::PCLPointCloud2> sor;
+            std::cout << "1: " << std::endl;
+            sor.setInputCloud (cloud_pointcloud2_);
+            std::cout << "2: " << std::endl;
             sor.setLeafSize (0.005f, 0.005f, 0.005f);
-            pcl::PCLPointCloud2 cloud_filtered;
-            sor.filter (cloud_filtered);
-            pcl::fromPCLPointCloud2(cloud_filtered,*cloud_filtered2);
-            */
+            std::cout << "3: " << std::endl;
+            pcl::PCLPointCloud2 cloud_filtered_tmp;
+            std::cout << "4: " << std::endl;
+            sor.filter (cloud_filtered_tmp);
+            std::cout << "5: " << std::endl;
+            pcl::fromPCLPointCloud2(cloud_filtered_tmp,*cloud_filtered_);
         }
 
         if (cloud_src_->points.size() == 0)
@@ -156,7 +165,15 @@ private:
         seg.setMethodType(pcl::SAC_RANSAC);
         seg.setMaxIterations(1000);
         seg.setDistanceThreshold(0.01);
-        seg.setInputCloud(cloud_src_);
+        if (filtering_pointcloud_)
+        {
+            seg.setInputCloud(cloud_filtered_);
+        }
+        else
+        {
+            seg.setInputCloud(cloud_src_);   
+        }
+        
         seg.segment (*inliers, *coefficients);
 
         if (inliers->indices.size() == 0)
@@ -178,13 +195,23 @@ private:
 
         // Create the filtering object
         pcl::ExtractIndices<pcl::PointXYZRGB> extract;
-
-        extract.setInputCloud(cloud_src_);
+        if (filtering_pointcloud_)
+        {
+            extract.setInputCloud(cloud_filtered_);
+        }
+        else
+        {
+            extract.setInputCloud(cloud_src_);                      
+        }
+        
         extract.setIndices (inliers);
         extract.setNegative (false);
         extract.filter (*cloud_p_);
-        std::cout << "PointCloud representing the planar component: " << cloud_p_->width * cloud_p_->height << " data points." << std::endl;
-
+        if(debug_)
+        {
+            std::cout << "PointCloud representing the planar component: " << cloud_p_->width * cloud_p_->height << " data points." << std::endl;
+        }
+       
         // Project the model inliers
 
         // Create a Concave Hull representation of the projected inliers
@@ -204,14 +231,24 @@ private:
         }
 
 
-        std::string file_name = "plane_"+std::to_string(savings_)+".yaml";
+
+        std::ostringstream oss;
+        oss << std::setfill('0') << std::setw(4) << savings_++;
+        const std::string frameNumber(oss.str());
+       
+        std::string file_name = frameNumber+"_color.yaml";
         std::string config_path = ros::package::getPath("simple_planar_segmentator")+"/data/"+file_name;
         std::ofstream ofs(config_path.c_str());
         cv::FileStorage fs(config_path, cv::FileStorage::WRITE);
 
+        cv::Vec4f planes_yaml;
+        planes_yaml[0] = coefficients->values[0];
+        planes_yaml[1] = coefficients->values[1];
+        planes_yaml[2] = coefficients->values[2];
+        planes_yaml[3]= coefficients->values[3];
+
         fs << "plane_coefficients";
-        fs << "[" << coefficients->values[0] << coefficients->values[1]
-               << coefficients->values[2] << coefficients->values[3] << "]" ;
+        fs << "[" << planes_yaml << "]" ;
         fs.release();                                       // explicit close
         
         for (size_t i = 0; i < cloud_p_->points.size(); i++)
@@ -221,14 +258,26 @@ private:
             cloud_p_->points[i].b = 0;
         }
 
-        *cloud_segmented_ = *cloud_src_ + *cloud_p_; //+ *cloud_hull_;
+
+        if (filtering_pointcloud_)
+        {
+            *cloud_segmented_ = *cloud_filtered_ + *cloud_p_; //+ *cloud_hull_;    
+        }
+        else
+        {
+            *cloud_segmented_ = *cloud_src_ + *cloud_p_; //+ *cloud_hull_;
+                              
+        }
+        
         *cloud_segmented_ = *cloud_segmented_ + *cloud_hull_;
 
-        pcl::PCDWriter writer;
-        std::string pcd_filename = "plane_"+std::to_string(savings_)+".pcd";
-        std::string pcd_path = ros::package::getPath("simple_planar_segmentator")+"/data/"+pcd_filename;
-        writer.write (pcd_path, *cloud_p_, false);
 
+        pcl::PCDWriter writer;
+        
+        std::string pcd_filename = frameNumber+"_color.pcd";
+        std::string pcd_path = ros::package::getPath("simple_planar_segmentator")+"/data/"+pcd_filename;
+
+        writer.write (pcd_path, *cloud_p_, false);
 
         simple_planar_segmentator::Plane plane_tmp;
 
